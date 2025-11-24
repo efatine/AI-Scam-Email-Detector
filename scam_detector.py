@@ -2,23 +2,28 @@ import pandas as pd
 import numpy as np
 import joblib
 import re
-from scipy.sparse import hstack
+from scipy.sparse import hstack, csr_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, classification_report
+from sentence_transformers import SentenceTransformer
 
 DATA_FILEPATH = 'emails.csv'
 TEXT_COLUMN = 'text'
 LABEL_COLUMN = 'spam'
 SCAM_LABEL_VALUE = 1
 
+MODEL_ARTIFACTS_PATH = 'scam_model_artifacts.joblib'
+
 MODEL_PATH = 'scam_detector_model.joblib'
 VECTORIZER_PATH = 'tfidf_vectorizer.joblib'
 SCALER_PATH = 'metadata_scaler.joblib' 
 METADATA_FEATURES = ['percent_caps', 'percent_punct', 'link_count', 'word_count']
 
+SBERT_MODEL_NAME = "all-MiniLM-L6-v2"  # good, small, fast SBERT model
+SBERT_SCALER_PATH = "sbert_scaler.joblib"
 
 def compute_metadata_features(texts):
     features = []
@@ -98,33 +103,60 @@ def train_model():
     X_train_meta_scaled = scaler.fit_transform(X_train_meta)
     X_test_meta_scaled = scaler.transform(X_test_meta)
 
-    # combine feature matrices
-    # convert to tocsr format for compatibility
-    X_train_combined = hstack([X_train_tfidf, X_train_meta_scaled]).tocsr()
-    X_test_combined = hstack([X_test_tfidf, X_test_meta_scaled]).tocsr()
+    # SBERT embeddings
+    print("Loading SBERT model and encoding emails...")
+    sbert_model = SentenceTransformer(SBERT_MODEL_NAME)
 
-    # train the model
-    print("Training Logistic Regression model...")
-    model = LogisticRegression(solver='liblinear', random_state=42)
-    model.fit(X_train_combined, y_train)
+    # SBERT returns dense numpy arrays
+    X_train_sbert = sbert_model.encode(X_train.tolist(), show_progress_bar=True)
+    X_test_sbert = sbert_model.encode(X_test.tolist(), show_progress_bar=True)
+
+    print("Scaling SBERT embeddings...")
+    sbert_scaler = StandardScaler()
+    X_train_sbert_scaled = sbert_scaler.fit_transform(X_train_sbert)
+    X_test_sbert_scaled = sbert_scaler.transform(X_test_sbert)
+
+    # train TF-IDF model (Keywords)
+    print("Training TF-IDF Model (Lexical)...")
+    X_train_lexical = hstack([X_train_tfidf, X_train_meta_scaled]).tocsr()
+    model_tfidf = LogisticRegression(solver='liblinear', random_state=42)
+    model_tfidf.fit(X_train_lexical, y_train)
+
+    # train SBERT model (Context)
+    print("Training SBERT Model (Semantic)...")
+    model_sbert = LogisticRegression(solver='liblinear', random_state=42)
+    model_sbert.fit(X_train_sbert_scaled, y_train)
 
     # evaluate the model
-    print("\n--- Model Evaluation ---")
-    y_pred = model.predict(X_test_combined)
-    accuracy = accuracy_score(y_test, y_pred)
-    print(f"Accuracy: {accuracy * 100:.2f}%")
-    print("\nClassification Report:")
-    print(classification_report(y_test, y_pred, target_names=['Not Scam', 'Scam']))
+    print("\n--- Evaluating Ensemble Accuracy ---")
     
-    # save model components
-    joblib.dump(model, MODEL_PATH)
-    joblib.dump(vectorizer, VECTORIZER_PATH)
-    joblib.dump(scaler, SCALER_PATH)
+    # prepare test data
+    X_test_lexical = hstack([X_test_tfidf, X_test_meta_scaled]).tocsr()
     
-    print(f"\nModel saved to {MODEL_PATH}")
-    print(f"Vectorizer saved to {VECTORIZER_PATH}")
-    print(f"Scaler saved to {SCALER_PATH}")
+    # get probabilities
+    pred_tfidf_prob = model_tfidf.predict_proba(X_test_lexical)[:, 1]
+    pred_sbert_prob = model_sbert.predict_proba(X_test_sbert_scaled)[:, 1]
 
+    # combine (average)
+    final_prob = (pred_tfidf_prob + pred_sbert_prob) / 2
+    final_pred = (final_prob > 0.5).astype(int)
+
+    accuracy = accuracy_score(y_test, final_pred)
+    print(f"Combined Model Accuracy: {accuracy * 100:.2f}%")
+    print(classification_report(y_test, final_pred, target_names=['Not Scam', 'Scam']))
+
+    # save model components
+    artifacts = {
+        "model_tfidf": model_tfidf,
+        "model_sbert": model_sbert,
+        "vectorizer": vectorizer,
+        "scaler": scaler,
+        "sbert_scaler": sbert_scaler
+    }
+    joblib.dump(artifacts, MODEL_ARTIFACTS_PATH)
+    print(f"\n Training Complete. Saved to {MODEL_ARTIFACTS_PATH}")
+
+# tf-idf
 def get_scam_indicators(email_text, model, vectorizer):
     feature_names = vectorizer.get_feature_names_out()
     coefficients = model.coef_[0]
@@ -144,42 +176,67 @@ def get_scam_indicators(email_text, model, vectorizer):
     sorted_scam_words = sorted(found_words.items(), key=lambda item: item[1], reverse=True)
     return sorted_scam_words
 
-def predict_email(email_text):
-    try:
-        model = joblib.load(MODEL_PATH)
-        vectorizer = joblib.load(VECTORIZER_PATH)
-        scaler = joblib.load(SCALER_PATH)
-    except FileNotFoundError:
-        print("Error: Model/vectorizer/scaler files not found.")
-        print(f"Please run `train_model()` first.")
-        return None
-
-    # transform text using loaded vectorizer
-    text_tfidf = vectorizer.transform([email_text])
+# tf-idf and SBERT
+def predict_email(email_text, artifacts=None):
+    # load artifacts (fixes speed issues)
+    if artifacts is None:
+        try:
+            artifacts = joblib.load(MODEL_ARTIFACTS_PATH)
+            artifacts['sbert_model_obj'] = SentenceTransformer(SBERT_MODEL_NAME)
+        except FileNotFoundError:
+            print("Error: Model files not found. Run train_model() first.")
+            return None
     
-    # compute and scale metadata features
-    text_meta = compute_metadata_features(pd.Series([email_text]))
+    if not isinstance(email_text, str):
+        email_text = ""
+
+    # unpack models
+    model_tfidf = artifacts['model_tfidf']
+    model_sbert = artifacts['model_sbert']
+    vectorizer = artifacts['vectorizer']
+    scaler = artifacts['scaler']
+    sbert_scaler = artifacts['sbert_scaler']
+    
+    # handle SBERT loading difference (API vs script)
+    if 'sbert_model_obj' in artifacts:
+        sbert_model_obj = artifacts['sbert_model_obj']
+    elif 'sbert_model' in artifacts:
+        sbert_model_obj = artifacts['sbert_model']
+    else:
+        # fallback
+        sbert_model_obj = SentenceTransformer(SBERT_MODEL_NAME)
+
+    # TF-IDF prediction (Keywords)
+    text_tfidf = vectorizer.transform([email_text])
+    text_meta = compute_metadata_features([email_text])
     text_meta_scaled = scaler.transform(text_meta)
     
-    # combine features
-    text_combined = hstack([text_tfidf, text_meta_scaled]).tocsr()
-    
-    # get prediction and probabilities
-    prediction = model.predict(text_combined)[0]
-    probabilities = model.predict_proba(text_combined)[0]
-    
-    # get flagged words
-    flagged_words = []
-    if prediction == 1:
-        flagged_words = [word for word, score in get_scam_indicators(email_text, model, vectorizer)[:5]]
+    text_combined_lexical = hstack([text_tfidf, text_meta_scaled]).tocsr()
+    tfidf_prob = model_tfidf.predict_proba(text_combined_lexical)[0][1]
 
-    is_scam = (prediction == 1)
-    confidence_percent = probabilities[prediction] * 100
+    # SBERT prediction (Context)
+    text_sbert = sbert_model_obj.encode([email_text])
+    text_sbert_scaled = sbert_scaler.transform(text_sbert)
     
+    sbert_prob = model_sbert.predict_proba(text_sbert_scaled)[0][1]
+
+    # combine scores
+    final_prob = (tfidf_prob + sbert_prob) / 2
+    is_scam = final_prob > 0.50
+    
+    # get flagged words (from TF-IDF model)
+    flagged_words = []
+    if tfidf_prob > 0.4:
+        flagged_words = [word for word, score in get_scam_indicators(email_text, model_tfidf, vectorizer)[:5]]
+
     result = {
-        "is_scam": is_scam,
+        "is_scam": bool(is_scam),
         "prediction": "Scam" if is_scam else "Not Scam",
-        "confidence_percent": f"{confidence_percent:.2f}%",
+        "confidence_percent": f"{final_prob * 100:.2f}%",
+        "breakdown": {
+            "tfidf_score": f"{tfidf_prob * 100:.1f}%",
+            "sbert_score": f"{sbert_prob * 100:.1f}%"
+        },
         "flagged_words": flagged_words
     }
     
@@ -213,6 +270,7 @@ if __name__ == "__main__":
     if ham_prediction:
         print(f"Prediction: {ham_prediction['prediction']}")
         print(f"Confidence: {ham_prediction['confidence_percent']}")
+        print(f"Breakdown: {ham_prediction['breakdown']}")
         print(f"Flagged Words: {ham_prediction['flagged_words']}")
 
     print("\n--- Testing 'Scam' Email ---")
@@ -221,4 +279,5 @@ if __name__ == "__main__":
     if scam_prediction:
         print(f"Prediction: {scam_prediction['prediction']}")
         print(f"Confidence: {scam_prediction['confidence_percent']}")
+        print(f"Breakdown: {scam_prediction['breakdown']}")
         print(f"Flagged Words: {scam_prediction['flagged_words']}")
