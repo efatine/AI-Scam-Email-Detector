@@ -3,11 +3,20 @@
 Install Dependencies:
 pip install -r requirements.txt
 
+Alternatively on Mac:
+pip3 install -r requirements.txt
+
 Train the AI Models (Run once):
 python scam_detector.py
 
+Alternatively on Mac:
+python3 scam_detector.py
+
 Start the Server:
 python -m uvicorn api:app --reload
+
+Alternatively on Mac:
+python3 -m uvicorn api:app --reload
 
 
 Frontend Setup (React):
