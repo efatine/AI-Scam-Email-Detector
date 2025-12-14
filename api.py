@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import joblib
 from sentence_transformers import SentenceTransformer
+from fastapi.concurrency import run_in_threadpool # Import this
 
 from scam_detector import predict_email, MODEL_ARTIFACTS_PATH, SBERT_MODEL_NAME
 
@@ -16,9 +17,9 @@ async def lifespan(app: FastAPI):
         artifacts = joblib.load(MODEL_ARTIFACTS_PATH)
         models.update(artifacts)
         models['sbert_model_obj'] = SentenceTransformer(SBERT_MODEL_NAME)
-        print("Models loaded!")
+        print("Models loaded successfully!")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error loading models: {e}")
     
     yield
     models.clear()
@@ -36,8 +37,10 @@ class EmailRequest(BaseModel):
     text: str
 
 @app.post("/predict")
-def predict(request: EmailRequest):
+async def predict(request: EmailRequest):
     if not models:
-        return {"error": "Models not loaded."}
+        return {"error": "Models are not loaded yet."}
         
-    return predict_email(request.text, artifacts=models)
+    # Run the heavy AI prediction in a separate thread so it doesn't block
+    result = await run_in_threadpool(predict_email, request.text, artifacts=models)
+    return result

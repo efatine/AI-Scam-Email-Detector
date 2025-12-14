@@ -221,3 +221,94 @@ h1, h2, h3, p {
     padding: 1.5rem;
   }
 }
+
+.section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #71717a;
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* Triggers Grid */
+.triggers-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.trigger-item {
+    background-color: #27272a;
+    border: 1px solid #3f3f46;
+    border-radius: 6px;
+    padding: 0.5rem;
+    font-size: 0.8rem;
+    color: #71717a;
+    text-align: center;
+    transition: all 0.2s;
+}
+
+.trigger-item.active {
+    background-color: #451a1a; /* Dark Red tint */
+    border-color: #ef4444;
+    color: #fecaca;
+    font-weight: bold;
+}
+
+/* LIME Styles */
+.lime-container {
+    background: #18181b;
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid #3f3f46;
+}
+
+.lime-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.lime-word {
+    width: 80px;
+    text-align: right;
+    margin-right: 10px;
+    font-weight: bold;
+    color: #e4e4e7;
+}
+
+.lime-bar-container {
+    flex-grow: 1;
+    height: 8px;
+    background: #27272a;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-right: 10px;
+    display: flex;
+    align-items: center;
+}
+
+.lime-bar {
+    height: 100%;
+    border-radius: 4px;
+}
+
+.lime-bar.scam {
+    background-color: #ef4444; /* Red */
+}
+
+.lime-bar.safe {
+    background-color: #22c55e; /* Green */
+}
+
+.lime-score {
+    width: 50px;
+    font-size: 0.8rem;
+    text-align: right;
+}
+
+.text-red { color: #ef4444; }
+.text-green { color: #22c55e; }

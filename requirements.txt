@@ -1,4 +1,5 @@
 pandas
+lime
 scikit-learn
 scipy
 joblib

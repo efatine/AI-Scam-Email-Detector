@@ -28,7 +28,7 @@ function App() {
       }
     } catch (err) {
       console.error(err);
-      setError("Could not reach the server. Is the backend running?");
+      setError("Could not reach the server. Make sure the backend is running.");
     } finally {
       setLoading(false);
     }
@@ -38,15 +38,16 @@ function App() {
     <div className="app-container">
       <div className="card">
         <div className="header">
-          <h1>AI Scam Email Detector</h1>
-          <p>Paste an email below to check for phishing indicators</p>
+          <h1>AI Scam Shield</h1>
+          <p>Advanced Hybrid-Model Detection</p>
         </div>
 
         <textarea
           className="email-input"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Subject: Urgent Request..."
+          placeholder="Paste email content here (Subject + Body)..."
+          rows={6}
         />
 
         <button 
@@ -54,65 +55,112 @@ function App() {
           onClick={handleAnalyze} 
           disabled={loading}
         >
-          {loading ? "Analyzing..." : "Analyze Email"}
+          {loading ? "Analyzing Psychology & Context..." : "Analyze Email"}
         </button>
 
-        {error && (
-          <div className="error-msg">{error}</div>
-        )}
+        {error && <div className="error-msg">{error}</div>}
 
         {result && !error && (
           <div className={`result-container ${result.is_scam ? "scam" : "safe"}`}>
+            {/* Top Badge */}
             <div className="result-header">
-              <div>
-                <span style={{color: '#a1a1aa', fontSize: '0.9rem'}}>Prediction</span>
-                <div className="result-badge">{result.prediction}</div>
+              <div className="badge-container">
+                <span className="label">VERDICT</span>
+                <div className="result-badge">{result.prediction.toUpperCase()}</div>
               </div>
-              <div style={{textAlign: 'right'}}>
-                <span style={{color: '#a1a1aa', fontSize: '0.9rem'}}>Combined Confidence</span>
-                <div style={{fontSize: '1.25rem', fontWeight: 'bold', color: '#fff'}}>
-                  {result.confidence_percent}
-                </div>
+              <div className="confidence-container">
+                <span className="label">RISK LEVEL</span>
+                <div className="confidence-score">{result.confidence_percent}</div>
               </div>
             </div>
 
-            <hr style={{ borderColor: '#3f3f46', margin: "1.5rem 0" }} />
+            <hr className="divider" />
 
-            {/* Breakdown Section */}
+            {/* Smart Triggers Section */}
+            <div className="section-title">PSYCHOLOGICAL TRIGGERS</div>
+            <div className="triggers-grid">
+                <div className={`trigger-item ${result.triggers.urgency_count > 0 ? 'active' : ''}`}>
+                    <span className="icon">⏰</span> Urgency ({result.triggers.urgency_count})
+                </div>
+                <div className={`trigger-item ${result.triggers.money_words > 0 ? 'active' : ''}`}>
+                    <span className="icon">💸</span> Financial ({result.triggers.money_words})
+                </div>
+                <div className={`trigger-item ${result.triggers.generic_greeting ? 'active' : ''}`}>
+                    <span className="icon">🤖</span> Generic Greeting
+                </div>
+            </div>
+
+            {/* Models Comparison */}
+            <div className="section-title" style={{marginTop: '1rem'}}>MODEL CONSENSUS</div>
             <div className="breakdown-grid">
               {/* TF-IDF Bar */}
               <div>
-                <span className="progress-label">Keyword Analysis (TF-IDF)</span>
+                <span className="progress-label">Keywords (TF-IDF)</span>
                 <div className="progress-bg">
-                  <div 
-                    className="progress-fill" 
-                    style={{ width: result.breakdown.tfidf_score, backgroundColor: "#3b82f6" }}
-                  ></div>
+                  <div className="progress-fill" style={{ width: result.breakdown.tfidf_score, backgroundColor: "#3b82f6" }}></div>
                 </div>
-                <span className="meta-text">{result.breakdown.tfidf_score} Suspicious</span>
+                <div style={{ textAlign: "right", fontSize: "0.8rem", color: "#a1a1aa", marginTop: "0.25rem" }}>
+                  {result.breakdown.tfidf_score}
+                </div>
               </div>
 
               {/* SBERT Bar */}
               <div>
-                <span className="progress-label">Context Analysis (SBERT)</span>
+                <span className="progress-label">Context (SBERT)</span>
                 <div className="progress-bg">
-                  <div 
-                    className="progress-fill" 
-                    style={{ width: result.breakdown.sbert_score, backgroundColor: "#a855f7" }}
-                  ></div>
+                  <div className="progress-fill" style={{ width: result.breakdown.sbert_score, backgroundColor: "#a855f7" }}></div>
                 </div>
-                <span className="meta-text">{result.breakdown.sbert_score} Suspicious</span>
+                <div style={{ textAlign: "right", fontSize: "0.8rem", color: "#a1a1aa", marginTop: "0.25rem" }}>
+                  {result.breakdown.sbert_score}
+                </div>
               </div>
             </div>
 
-            {result.flagged_words && result.flagged_words.length > 0 && (
-              <div style={{marginTop: '1.5rem'}}>
-                <span className="progress-label" style={{color: '#ef4444'}}>🚩 Flagged words: </span>
-                <p style={{ marginTop: "0.25rem", color: "#d4d4d8" }}>
-                  {result.flagged_words.join(", ")}
-                </p>
-              </div>
-            )}
+            {/* LIME Visualization (NORMALIZED) */}
+            <div className="section-title" style={{marginTop: '1.5rem'}}>
+              KEYWORD IMPACT (Relative Importance)
+            </div>
+            <div className="lime-container">
+                {(() => {
+                  // 1. Calculate the total weight of all features returned to normalize them
+                  const totalWeight = result.lime_explanation.reduce((sum, item) => sum + Math.abs(item[1]), 0);
+                  
+                  // Avoid divide by zero
+                  const safeTotal = totalWeight || 1; 
+
+                  return result.lime_explanation.map((item, index) => {
+                    const word = item[0];
+                    const rawWeight = item[1];
+                    const isScamIndicator = rawWeight > 0;
+                    
+                    // 2. Calculate Normalized Percentage (Contribution to the decision)
+                    // "Of the words that mattered, how much did THIS word matter?"
+                    const relativeImpact = (Math.abs(rawWeight) / safeTotal) * 100;
+
+                    return (
+                        <div key={index} className="lime-row">
+                            <span className="lime-word">"{word}"</span>
+                            <div className="lime-bar-container">
+                                {isScamIndicator ? (
+                                    <div 
+                                        className="lime-bar scam" 
+                                        style={{ width: `${relativeImpact}%` }}
+                                    ></div>
+                                ) : (
+                                    <div 
+                                        className="lime-bar safe" 
+                                        style={{ width: `${relativeImpact}%` }}
+                                    ></div>
+                                )}
+                            </div>
+                            <span className={`lime-score ${isScamIndicator ? 'text-red' : 'text-green'}`}>
+                                {isScamIndicator ? "+" : ""}{relativeImpact.toFixed(1)}%
+                            </span>
+                        </div>
+                    );
+                  });
+                })()}
+            </div>
           </div>
         )}
       </div>
