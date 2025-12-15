@@ -167,40 +167,47 @@ def train_model():
     joblib.dump(artifacts, MODEL_ARTIFACTS_PATH)
     print("Training Complete.")
 
-# LIME Explainer Function
+# Create explainer once
+LIME_EXPLAINER = LimeTextExplainer(class_names=["Safe", "Scam"])
+
 def get_lime_explanation(email_text, artifacts):
-    # Wrapper to make our complex pipeline look like a simple function for LIME
+    # LIME explanation using a batched predictor for speed.
+    # num_samples controls explanation stability vs runtime.
+        
+    # Load SBERT once (outside the predictor loop)
+    sbert = artifacts.get("sbert_model_obj") or SentenceTransformer(SBERT_MODEL_NAME)
+    sbert_batch_size = 32
+    
     def predictor(texts):
         # This function must return shape (n_samples, 2) -> [prob_not_scam, prob_scam]
-        results = []
-        for t in texts:
-            # 1. Features
-            t_vec = artifacts['vectorizer'].transform([t])
-            t_meta = compute_metadata_features([t])
-            t_meta_scaled = artifacts['scaler'].transform(t_meta)
-            t_lex = hstack([t_vec, t_meta_scaled]).tocsr()
-            
-            # 2. SBERT
-            # Check if model object exists (API) or needs loading
-            sbert = artifacts.get('sbert_model_obj') or SentenceTransformer(SBERT_MODEL_NAME)
-            t_sbert = sbert.encode([t])
-            t_sbert_scaled = artifacts['sbert_scaler'].transform(t_sbert)
-            
-            # 3. Base Probs
-            p_tfidf = artifacts['model_tfidf'].predict_proba(t_lex)[0][1]
-            p_sbert = artifacts['model_sbert'].predict_proba(t_sbert_scaled)[0][1]
-            
-            # 4. Meta Prob
-            stack_in = np.column_stack((p_tfidf, p_sbert, t_meta_scaled))
-            final_p_scam = artifacts['meta_model'].predict_proba(stack_in)[0][1]
-            
-            results.append([1 - final_p_scam, final_p_scam])
-            
-        return np.array(results)
+        texts = list(texts)
 
-    explainer = LimeTextExplainer(class_names=['Safe', 'Scam'])
+        # 1. Features (batch)
+        X_vec = artifacts["vectorizer"].transform(texts)
+        X_meta = compute_metadata_features(texts)
+        X_meta_scaled = artifacts["scaler"].transform(X_meta)
+
+        # TF-IDF is sparse; metadata is dense -> convert metadata to sparse before hstack
+        X_lex = hstack([X_vec, csr_matrix(X_meta_scaled)]).tocsr()
+
+        # 2. SBERT (batch)
+        X_sbert = sbert.encode(texts, batch_size=sbert_batch_size, show_progress_bar=False)
+        X_sbert_scaled = artifacts["sbert_scaler"].transform(X_sbert)
+
+        # 3. Base Probs (batch)
+        p_tfidf = artifacts["model_tfidf"].predict_proba(X_lex)[:, 1]
+        p_sbert = artifacts["model_sbert"].predict_proba(X_sbert_scaled)[:, 1]
+
+        # 4. Meta Prob (batch)
+        stack_in = np.column_stack((p_tfidf, p_sbert, X_meta_scaled))
+        final_p_scam = artifacts["meta_model"].predict_proba(stack_in)[:, 1]
+
+        # return (n,2)
+        results = np.column_stack((1.0 - final_p_scam, final_p_scam))
+        return results
+
     # num_features=6 returns the top 6 most influential words
-    exp = explainer.explain_instance(email_text, predictor, num_features=6, num_samples=200)
+    exp = LIME_EXPLAINER.explain_instance(email_text, predictor, num_features=6, num_samples=200)
     return exp.as_list()
 
 def predict_email(email_text, artifacts=None):
